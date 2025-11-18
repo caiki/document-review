@@ -2,10 +2,14 @@ import azure.functions as func
 import logging
 import io
 import os
-from typing import Dict, List
+import base64
+from typing import Dict, List, Optional
 from docx import Document
+from docx.oxml import parse_xml
+from docx.oxml.ns import qn
 from openai import AzureOpenAI
 import json
+from PIL import Image
 
 app = func.FunctionApp()
 
@@ -21,6 +25,68 @@ client = AzureOpenAI(
     api_key=AZURE_OPENAI_API_KEY,
     api_version=AZURE_OPENAI_API_VERSION
 )
+
+
+def describe_image(image_bytes: bytes, context: str = "") -> str:
+    """
+    Gera descrição de imagem usando Azure OpenAI Vision (GPT-4o).
+    
+    Args:
+        image_bytes: Bytes da imagem
+        context: Contexto adicional sobre a imagem (opcional)
+        
+    Returns:
+        Descrição da imagem em português
+    """
+    try:
+        # Converter imagem para base64
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
+        # Determinar tipo MIME da imagem
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img_format = img.format.lower()
+            mime_type = f"image/{img_format}" if img_format in ['jpeg', 'jpg', 'png', 'gif', 'webp'] else "image/jpeg"
+        except:
+            mime_type = "image/jpeg"
+        
+        system_prompt = """Você é um especialista em descrição de imagens para acessibilidade.
+Descreva a imagem de forma clara, concisa e informativa em português.
+Foque nos elementos principais, texto visível, e propósito da imagem.
+Mantenha a descrição objetiva e útil para alguém que não pode ver a imagem."""
+
+        user_prompt = "Descreva esta imagem em português de forma clara e concisa."
+        if context:
+            user_prompt += f"\n\nContexto do documento: {context}"
+        
+        response = client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=500,
+            temperature=0.3
+        )
+        
+        description = response.choices[0].message.content.strip()
+        logging.info(f"✅ Imagem descrita: {description[:50]}...")
+        return description
+        
+    except Exception as e:
+        logging.error(f"Erro ao descrever imagem: {str(e)}")
+        return "Imagem sem descrição disponível"
 
 
 def process_paragraph_text(text: str) -> str:
@@ -64,12 +130,14 @@ IMPORTANTE: Retorne somente o texto corrigido, preservando a formatação quando
         return text  # Retorna texto original em caso de erro
 
 
-def process_word_document(file_content: bytes) -> bytes:
+def process_word_document(file_content: bytes, describe_images: bool = True) -> bytes:
     """
     Processa documento Word completo mantendo formatação, imagens, tabelas, etc.
+    Adiciona descrições automáticas às imagens usando Azure OpenAI Vision.
     
     Args:
         file_content: Conteúdo binário do documento Word
+        describe_images: Se True, adiciona descrições às imagens
         
     Returns:
         Conteúdo binário do documento corrigido
@@ -79,6 +147,13 @@ def process_word_document(file_content: bytes) -> bytes:
     doc = Document(doc_stream)
     
     logging.info(f"Processando documento com {len(doc.paragraphs)} parágrafos")
+    
+    # Contar imagens no documento
+    images_count = 0
+    for rel in doc.part.rels.values():
+        if "image" in rel.target_ref:
+            images_count += 1
+    logging.info(f"Imagens encontradas no documento: {images_count}")
     
     # Processar cada parágrafo mantendo formatação
     paragraphs_processed = 0
@@ -107,6 +182,49 @@ def process_word_document(file_content: bytes) -> bytes:
                 continue
     
     logging.info(f"Total de parágrafos corrigidos: {paragraphs_processed}")
+    
+    # Processar e descrever imagens
+    if describe_images and images_count > 0:
+        logging.info("🖼️ Iniciando descrição de imagens...")
+        images_described = 0
+        
+        try:
+            # Processar inline shapes (imagens incorporadas)
+            for paragraph in doc.paragraphs:
+                for run in paragraph.runs:
+                    # Verificar se o run contém imagem
+                    if 'graphic' in run._element.xml:
+                        try:
+                            # Extrair a imagem
+                            blip_elements = run._element.xpath('.//a:blip')
+                            if blip_elements:
+                                for blip in blip_elements:
+                                    embed = blip.get(qn('r:embed'))
+                                    if embed:
+                                        image_part = doc.part.related_parts[embed]
+                                        image_bytes = image_part.blob
+                                        
+                                        # Gerar descrição
+                                        context = paragraph.text[:100] if paragraph.text else ""
+                                        description = describe_image(image_bytes, context)
+                                        
+                                        # Adicionar descrição como alt text
+                                        # Procurar docPr (propriedades do desenho)
+                                        docPr_elements = run._element.xpath('.//wp:docPr')
+                                        if docPr_elements:
+                                            docPr = docPr_elements[0]
+                                            docPr.set('descr', description)
+                                            docPr.set('title', description[:100])
+                                        
+                                        images_described += 1
+                                        logging.info(f"  ✅ Imagem {images_described} descrita")
+                        except Exception as e:
+                            logging.warning(f"  ⚠️ Erro ao processar imagem inline: {str(e)}")
+            
+            logging.info(f"✅ Total de imagens descritas: {images_described}")
+            
+        except Exception as e:
+            logging.error(f"Erro ao processar imagens: {str(e)}")
     
     # Processar tabelas
     for table in doc.tables:
