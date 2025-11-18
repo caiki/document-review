@@ -9,26 +9,27 @@ A Azure Function agora **descreve automaticamente todas as imagens** dos documen
 ## 🎯 O que faz?
 
 ### Antes (sem descrição):
-```xml
-<pic>
-  <nvPicPr>
-    <cNvPr id="1" name="Imagem1"/>
-  </nvPicPr>
-  <blip r:embed="rId4"/>
-</pic>
+```
+[Imagem de gráfico]
+
+Próximo parágrafo do documento...
 ```
 
-### Depois (com descrição automática):
-```xml
-<pic>
-  <nvPicPr>
-    <cNvPr id="1" name="Imagem1" 
-           descr="Gráfico de barras mostrando crescimento de vendas de 2020 a 2024"
-           title="Gráfico de barras mostrando crescimento de vendas"/>
-  </nvPicPr>
-  <blip r:embed="rId4"/>
-</pic>
+### Depois (com descrição automática inserida no texto):
 ```
+[Imagem de gráfico]
+
+Gráfico de barras com evolução de vendas entre 2020 e 2024. 
+Crescimento de R$ 100 mil para R$ 450 mil, com pico em 2023.
+
+Próximo parágrafo do documento...
+```
+
+**Características da descrição:**
+- ✅ Inserida como **parágrafo de texto** após a imagem
+- ✅ Formatada em **itálico** para diferenciar do conteúdo original
+- ✅ **Pontual e objetiva** - sem redundâncias (2-3 frases curtas)
+- ✅ Foca no **essencial**: tipo + conteúdo + dados relevantes
 
 ---
 
@@ -42,16 +43,19 @@ Imagens encontradas no documento: 5
 
 ### 2. Análise com GPT-4o Vision
 Para cada imagem:
-- 📸 Extrai a imagem do documento
-- 🤖 Envia para GPT-4o Vision
-- 📝 Recebe descrição em português
-- ✍️ Adiciona como alt text na imagem
+- 📸 Extrai a imagem do documento Word
+- 🤖 Envia para GPT-4o Vision API
+- 📝 Recebe descrição **pontual e objetiva** em português
+- ✍️ **Insere como parágrafo de texto** logo após a imagem
+- 🎨 Aplica **formatação em itálico** para destacar
 
-### 3. Contexto Inteligente
+### 3. Descrição Pontual (SEM Redundâncias)
 ```python
-# Usa o texto ao redor da imagem como contexto
-context = "Capítulo 3: Análise de Vendas..."
-description = describe_image(image_bytes, context)
+# Sistema instrui o GPT-4o para descrições CURTAS
+- Máximo 2-3 frases
+- SEM frases como "A imagem mostra...", "Podemos ver..."
+- Inicia DIRETAMENTE com a descrição
+- Apenas o essencial: tipo + conteúdo + dados
 ```
 
 ---
@@ -60,21 +64,36 @@ description = describe_image(image_bytes, context)
 
 ### Documento com imagens:
 ```
-Documento: Relatório Anual 2024
-├── Parágrafo: "Análise de crescimento..."
-├── Imagem 1: [gráfico de barras]
-├── Parágrafo: "Nossa equipe..."
-├── Imagem 2: [foto da equipe]
-└── Parágrafo: "Resultados..."
-    └── Imagem 3: [tabela de dados]
+Parágrafo: "No último trimestre observamos..."
+
+[IMAGEM: Gráfico de barras]
+
+Parágrafo original seguinte: "Esses resultados demonstram..."
 ```
 
-### Descrições geradas:
+### Após processamento:
 ```
+Parágrafo: "No último trimestre observamos..."
+
+[IMAGEM: Gráfico de barras]
+
+Gráfico de barras com receita trimestral de 2024. 
+Q1: R$ 200k, Q2: R$ 350k, Q3: R$ 420k, Q4: R$ 510k.
+
+Parágrafo original seguinte: "Esses resultados demonstram..."
+```
+
+### Logs durante processamento:
+```
+Processando documento com 45 parágrafos
+Imagens encontradas no documento: 3
 🖼️ Iniciando descrição de imagens...
-  ✅ Imagem 1 descrita: "Gráfico de barras verticais mostrando crescimento..."
-  ✅ Imagem 2 descrita: "Fotografia de grupo com aproximadamente 15 pessoas..."
-  ✅ Imagem 3 descrita: "Tabela com dados financeiros divididos por trimestre..."
+✅ Imagem descrita: Gráfico de barras com receita trimestral...
+  ✅ Imagem 1 descrita e inserida no texto
+✅ Imagem descrita: Organograma da estrutura organizacional...
+  ✅ Imagem 2 descrita e inserida no texto
+✅ Imagem descrita: Fluxograma do processo de aprovação...
+  ✅ Imagem 3 descrita e inserida no texto
 ✅ Total de imagens descritas: 3
 ```
 
@@ -121,79 +140,120 @@ Por padrão, a descrição está **ATIVADA**.
 
 Para desativar, edite `function_app.py`:
 ```python
-# Linha ~208 (HTTP endpoint)
+# Linha ~260 (HTTP endpoint)
 corrected_content = process_word_document(file_content, describe_images=False)
 
-# Linha ~290 (Blob trigger)
+# Linha ~342 (Blob trigger)
 corrected_content = process_word_document(file_content, describe_images=False)
 ```
 
-### Personalizar Prompt de Descrição
+### Personalizar Estilo da Descrição
 
 Edite a função `describe_image()` em `function_app.py`:
 
 ```python
-system_prompt = """Você é um especialista em descrição de imagens.
+system_prompt = """Você é um especialista em descrição objetiva de imagens.
 
 PERSONALIZE AQUI:
-- Nível de detalhe
-- Estilo de linguagem
-- Foco específico (acessibilidade, técnico, etc.)
-- Comprimento da descrição
+- Nível de detalhe (atualmente: 2-3 frases)
+- Estilo (atualmente: pontual e objetivo)
+- Tipo de informação prioritária
+- Tom (técnico, coloquial, acadêmico)
 """
+```
+
+### Ajustar Formatação do Parágrafo de Descrição
+
+Na função `process_word_document()`, linha ~218:
+
+```python
+# Atualmente: itálico aplicado
+for run in new_para.runs:
+    run.italic = True  # Remova esta linha para texto normal
+    # run.bold = True  # Adicione para negrito
+    # run.font.color.rgb = RGBColor(128, 128, 128)  # Cor cinza
+```
+
+### Mudar Comprimento das Descrições
+
+Ajuste `max_tokens` na função `describe_image()`:
+
+```python
+max_tokens=300,  # Atual: descrições curtas (2-3 frases)
+# max_tokens=150,  # Para descrições muito curtas (1 frase)
+# max_tokens=600,  # Para descrições detalhadas (4-6 frases)
 ```
 
 ---
 
 ## 📝 Exemplos de Descrições Geradas
 
-### Exemplo 1: Gráfico
-**Imagem:** Gráfico de pizza com fatias coloridas
+### Exemplo 1: Gráfico de Barras
+**Imagem:** Gráfico de barras com vendas mensais
 
-**Descrição Gerada:**
-> "Gráfico de pizza dividido em 4 segmentos representando diferentes categorias de produtos. O maior segmento (40%) é azul e representa eletrônicos, seguido por verde (30%) para vestuário, amarelo (20%) para alimentos e vermelho (10%) para outros."
+**Descrição Pontual Inserida no Texto:**
+> *Gráfico de barras com vendas de janeiro a junho de 2024. Crescimento de R$ 50k para R$ 180k, com pico em maio.*
 
-### Exemplo 2: Diagrama
-**Imagem:** Fluxograma de processo
+### Exemplo 2: Fluxograma
+**Imagem:** Fluxograma de aprovação de documentos
 
-**Descrição Gerada:**
-> "Fluxograma mostrando o processo de aprovação de documentos. Inicia com 'Solicitação', passa por 'Análise', seguida de uma decisão 'Aprovado?'. Se sim, vai para 'Publicação', se não, retorna para 'Revisão'."
+**Descrição Pontual Inserida no Texto:**
+> *Fluxograma de aprovação: Solicitação → Análise → Decisão → Aprovado (Publicação) ou Negado (Revisão).*
 
 ### Exemplo 3: Fotografia
-**Imagem:** Foto de escritório
+**Imagem:** Foto de equipe em escritório
 
-**Descrição Gerada:**
-> "Ambiente de escritório moderno com mesas de trabalho compartilhadas, computadores, plantas decorativas e janelas com luz natural. Aproximadamente 6 pessoas trabalhando em estações individuais."
+**Descrição Pontual Inserida no Texto:**
+> *Equipe de 8 pessoas em escritório moderno com estações de trabalho individuais e luz natural.*
 
-### Exemplo 4: Screenshot
-**Imagem:** Captura de tela de aplicativo
+### Exemplo 4: Tabela/Infográfico
+**Imagem:** Infográfico com dados estatísticos
 
-**Descrição Gerada:**
-> "Interface de um aplicativo de gerenciamento de tarefas mostrando uma lista de afazeres com caixas de seleção, datas de vencimento e botões de ação 'Editar' e 'Excluir'."
+**Descrição Pontual Inserida no Texto:**
+> *Infográfico com três métricas principais: 85% satisfação do cliente, 42% aumento de vendas, 98% taxa de entrega.*
+
+### Exemplo 5: Diagrama Técnico
+**Imagem:** Diagrama de arquitetura de sistema
+
+**Descrição Pontual Inserida no Texto:**
+> *Arquitetura de três camadas: Frontend (React) → API (Node.js) → Banco de dados (PostgreSQL).*
+
+**Características comuns:**
+- ✅ **Curtas**: 1-3 frases
+- ✅ **Diretas**: Sem "A imagem mostra...", "Podemos observar..."
+- ✅ **Objetivas**: Apenas informações essenciais
+- ✅ **Em itálico**: Diferenciadas do conteúdo original
+- ✅ **Dados específicos**: Quando aplicável (valores, percentuais, quantidades)
 
 ---
 
 ## 🎯 Benefícios
 
-### 1. Acessibilidade
-✅ Pessoas com deficiência visual podem entender o conteúdo das imagens
-✅ Leitores de tela conseguem narrar as descrições
-✅ Conformidade com WCAG 2.1 (Web Content Accessibility Guidelines)
+### 1. Clareza e Objetividade
+✅ Descrições pontuais facilitam leitura rápida
+✅ SEM redundâncias ou informações desnecessárias
+✅ Foco apenas no essencial da imagem
 
-### 2. SEO e Indexação
-✅ Documentos se tornam mais pesquisáveis
-✅ Busca por conteúdo visual
-✅ Melhor organização de arquivos
+### 2. Integração no Documento
+✅ Descrição aparece como **texto normal** no documento
+✅ Formatada em **itálico** para diferenciar do conteúdo original
+✅ Posicionada **logo após a imagem**
+✅ Pode ser editada, copiada e formatada como qualquer texto
 
-### 3. Documentação
-✅ Histórico de imagens documentado
-✅ Facilita revisões futuras
-✅ Compartilhamento mais efetivo
+### 3. Acessibilidade
+✅ Pessoas que não veem imagens entendem o conteúdo visual
+✅ Útil quando imagens não carregam (email, impressão P&B)
+✅ Facilita revisão sem precisar abrir cada imagem
 
-### 4. Automação
+### 4. Documentação
+✅ Registro textual do conteúdo visual
+✅ Facilita buscas no documento (Ctrl+F funciona)
+✅ Melhor para arquivamento e referência futura
+
+### 5. Automação
 ✅ Economiza tempo de descrição manual
 ✅ Consistência nas descrições
-✅ Escalabilidade para grandes volumes
+✅ Escalável para grandes volumes de documentos
 
 ---
 

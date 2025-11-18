@@ -29,14 +29,15 @@ client = AzureOpenAI(
 
 def describe_image(image_bytes: bytes, context: str = "") -> str:
     """
-    Gera descrição de imagem usando Azure OpenAI Vision (GPT-4o).
+    Gera descrição pontual de imagem usando Azure OpenAI Vision (GPT-4o).
+    A descrição será inserida no texto do documento após a imagem.
     
     Args:
         image_bytes: Bytes da imagem
         context: Contexto adicional sobre a imagem (opcional)
         
     Returns:
-        Descrição da imagem em português
+        Descrição pontual da imagem em português
     """
     try:
         # Converter imagem para base64
@@ -50,14 +51,24 @@ def describe_image(image_bytes: bytes, context: str = "") -> str:
         except:
             mime_type = "image/jpeg"
         
-        system_prompt = """Você é um especialista em descrição de imagens para acessibilidade.
-Descreva a imagem de forma clara, concisa e informativa em português.
-Foque nos elementos principais, texto visível, e propósito da imagem.
-Mantenha a descrição objetiva e útil para alguém que não pode ver a imagem."""
+        system_prompt = """Você é um especialista em descrição objetiva de imagens.
 
-        user_prompt = "Descreva esta imagem em português de forma clara e concisa."
+REGRAS:
+1. Seja PONTUAL e OBJETIVO - máximo 2-3 frases curtas
+2. SEM redundâncias ou repetições
+3. Descreva apenas o essencial: tipo de imagem + conteúdo principal + dados relevantes
+4. Se for gráfico/tabela: cite valores ou tendências principais
+5. Se for diagrama: descreva o fluxo ou estrutura
+6. Se for foto/ilustração: identifique elementos principais
+7. NÃO use frases como "A imagem mostra", "Podemos ver", "Observa-se"
+8. Inicie DIRETAMENTE com a descrição
+9. Use linguagem clara e técnica quando apropriado
+
+Formato: 1-3 frases diretas e objetivas em português."""
+
+        user_prompt = "Descreva esta imagem de forma pontual e objetiva."
         if context:
-            user_prompt += f"\n\nContexto do documento: {context}"
+            user_prompt += f"\n\nContexto: {context}"
         
         response = client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT,
@@ -76,17 +87,17 @@ Mantenha a descrição objetiva e útil para alguém que não pode ver a imagem.
                     ]
                 }
             ],
-            max_tokens=500,
-            temperature=0.3
+            max_tokens=300,
+            temperature=0.2
         )
         
         description = response.choices[0].message.content.strip()
-        logging.info(f"✅ Imagem descrita: {description[:50]}...")
+        logging.info(f"✅ Imagem descrita: {description[:80]}...")
         return description
         
     except Exception as e:
         logging.error(f"Erro ao descrever imagem: {str(e)}")
-        return "Imagem sem descrição disponível"
+        return "[Descrição indisponível]"
 
 
 def process_paragraph_text(text: str) -> str:
@@ -189,13 +200,15 @@ def process_word_document(file_content: bytes, describe_images: bool = True) -> 
         images_described = 0
         
         try:
-            # Processar inline shapes (imagens incorporadas)
-            for paragraph in doc.paragraphs:
+            # Coletar parágrafos com imagens (iterar em ordem reversa para inserir descrições)
+            paragraphs_with_images = []
+            for idx, paragraph in enumerate(doc.paragraphs):
+                has_image = False
+                image_data = None
+                
                 for run in paragraph.runs:
-                    # Verificar se o run contém imagem
                     if 'graphic' in run._element.xml:
                         try:
-                            # Extrair a imagem
                             blip_elements = run._element.xpath('.//a:blip')
                             if blip_elements:
                                 for blip in blip_elements:
@@ -204,22 +217,52 @@ def process_word_document(file_content: bytes, describe_images: bool = True) -> 
                                         image_part = doc.part.related_parts[embed]
                                         image_bytes = image_part.blob
                                         
+                                        # Coletar contexto dos parágrafos vizinhos
+                                        context_parts = []
+                                        if idx > 0:
+                                            context_parts.append(doc.paragraphs[idx - 1].text[:100])
+                                        if paragraph.text:
+                                            context_parts.append(paragraph.text[:100])
+                                        if idx < len(doc.paragraphs) - 1:
+                                            context_parts.append(doc.paragraphs[idx + 1].text[:100])
+                                        context = " ".join(context_parts)
+                                        
                                         # Gerar descrição
-                                        context = paragraph.text[:100] if paragraph.text else ""
                                         description = describe_image(image_bytes, context)
                                         
-                                        # Adicionar descrição como alt text
-                                        # Procurar docPr (propriedades do desenho)
-                                        docPr_elements = run._element.xpath('.//wp:docPr')
-                                        if docPr_elements:
-                                            docPr = docPr_elements[0]
-                                            docPr.set('descr', description)
-                                            docPr.set('title', description[:100])
-                                        
-                                        images_described += 1
-                                        logging.info(f"  ✅ Imagem {images_described} descrita")
+                                        paragraphs_with_images.append((idx, paragraph._element, description))
+                                        has_image = True
+                                        break
                         except Exception as e:
-                            logging.warning(f"  ⚠️ Erro ao processar imagem inline: {str(e)}")
+                            logging.warning(f"  ⚠️ Erro ao processar imagem: {str(e)}")
+                    
+                    if has_image:
+                        break
+            
+            # Inserir descrições após as imagens (ordem reversa para não afetar índices)
+            for idx, para_element, description in reversed(paragraphs_with_images):
+                try:
+                    # Criar novo parágrafo com a descrição
+                    parent = para_element.getparent()
+                    
+                    # Criar elemento de parágrafo usando python-docx
+                    new_para = doc.add_paragraph()
+                    new_para.text = description
+                    # Opcional: aplicar estilo itálico à descrição
+                    for run in new_para.runs:
+                        run.italic = True
+                        run.font.size = run.font.size  # Mantém tamanho original
+                    
+                    new_para_element = new_para._element
+                    
+                    # Inserir logo após o parágrafo da imagem
+                    parent.insert(parent.index(para_element) + 1, new_para_element)
+                    
+                    images_described += 1
+                    logging.info(f"  ✅ Imagem {images_described} descrita e inserida no texto")
+                    
+                except Exception as e:
+                    logging.warning(f"  ⚠️ Erro ao inserir descrição: {str(e)}")
             
             logging.info(f"✅ Total de imagens descritas: {images_described}")
             
